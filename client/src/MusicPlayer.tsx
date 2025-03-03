@@ -1,16 +1,14 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import * as Tone from 'tone';
 import { createSnare, createHiHat, createBassDrum, createBassGuitar, createGuitar, createPiano, createKick } from './synthesizers';
 import { useSocket } from './hooks/useSocket';
 import { SynthOptions } from 'tone';
 
 // Define Synths type
-type BassDrumSynth = { triggerAttack: (time: number) => void, triggerRelease: (time: number) => void };
-
 interface Synths {
   kick: Tone.MembraneSynth;
   snare: Tone.NoiseSynth;
-  bass_drum: BassDrumSynth;
+  bass_drum: Tone.MembraneSynth;
   hihat: Tone.MetalSynth;
   bass_guitar: Tone.Synth;
   guitar: Tone.PolySynth<Tone.FMSynth>;
@@ -20,19 +18,18 @@ interface Synths {
 Tone.Transport.bpm.value = 80;
 
 const timeTable = {
-  'snare': '8n',
-  'kick': '2n',
-  'bass_drum': '2n',
-  'hihat': '16n',
-  'bass_guitar': '2n',
-  'guitar': '2n',
-  'piano': '2n',
+  snare: '8n',
+  kick: '2n',
+  bass_drum: '2n',
+  hihat: '16n',
+  bass_guitar: '2n',
+  guitar: '2n',
+  piano: '2n',
 };
 
 function MusicPlayer() {
-  const audioContextRef = useRef<Tone.Context>(new Tone.Context({ latencyHint: 'playback' }));
+  const audioContextRef = useRef<Tone.Context>(Tone.getContext());
   const socket = useSocket();
-
   const [synths, setSynths] = useState<Synths | null>(null);
 
   useEffect(() => {
@@ -51,81 +48,87 @@ function MusicPlayer() {
     loadSynths();
   }, []);
 
-  const chordToNotes = (chord: string) => {
-    // A simple mapping from chord names to note arrays
-    const chordMap = {
-      'Amaj': ['A', 'C#', 'E'],
-      'Bmaj': ['B', 'D#', 'F#'],
-      'Cmaj': ['C', 'E', 'G'],
-      'Dmaj': ['D', 'F#', 'A'],
-      'Emaj': ['E', 'G#', 'B'],
-      'Fmaj': ['F', 'A', 'C'],
-      'Gmaj': ['G', 'B', 'D'],
-      'Amin': ['A', 'C', 'E'],
-      'Bmin': ['B', 'D', 'F#'],
-      'Cmin': ['C', 'Eb', 'G'],
-      'Dmin': ['D', 'F', 'A'],
-      'Emin': ['E', 'G', 'B'],
-      'Fmin': ['F', 'Ab', 'C'],
-      'Gmin': ['G', 'Bb', 'D'],
-      
-      // Add more chords as needed
+  const chordToNotes = (chord: string): string[] => {
+    const chordMap: Record<string, string[]> = {
+      Amaj: ['A', 'C#', 'E'],
+      Bmaj: ['B', 'D#', 'F#'],
+      Cmaj: ['C', 'E', 'G'],
+      Dmaj: ['D', 'F#', 'A'],
+      Emaj: ['E', 'G#', 'B'],
+      Fmaj: ['F', 'A', 'C'],
+      Gmaj: ['G', 'B', 'D'],
+      Amin: ['A', 'C', 'E'],
+      Bmin: ['B', 'D', 'F#'],
+      Cmin: ['C', 'Eb', 'G'],
+      Dmin: ['D', 'F', 'A'],
+      Emin: ['E', 'G', 'B'],
+      Fmin: ['F', 'Ab', 'C'],
+      Gmin: ['G', 'Bb', 'D'],
     };
-  
-    return chordMap[chord as keyof typeof chordMap] || [];
+
+    return chordMap[chord] || [];
   };
 
-  const playInstrument = useCallback((instrument: string, chordOrNote: string | undefined) => {
-    if (!chordOrNote) {
-      return;
-    }
-  
-    if (!synths) {
-      console.error('Synths not loaded');
-      return;
-    }
-  
-    const synth = synths[instrument as keyof Synths];
-    if (!synth) {
-      console.error(`Instrument ${instrument} not found`);
-      return;
-    }
-  
-    try {
-      console.log(`Playing ${instrument} notes ${chordOrNote}`);
-      const notes = chordToNotes(chordOrNote);
-      notes.forEach((note, index) => {
-        const noteWithOctave = note.length === 1 ? `${note}4` : note; // Append '4' if octave is missing
-        const startTime = Tone.now() + index * 0.2 + 0.1; // Add a small delay
-  
-        if (synth instanceof Tone.Sampler) {
-          synth.triggerAttack(noteWithOctave, startTime);
-          synth.triggerRelease(startTime + 0.5); // Release the note after 0.5 seconds
-        } else if (synth.triggerAttack) {
-          synth.triggerAttack(startTime);
-          synth.triggerRelease(startTime + 0.5); // Release the note after 0.5 seconds
-        } else {
-          (synth as Tone.Synth<SynthOptions>).triggerAttackRelease(noteWithOctave, timeTable[instrument as keyof typeof timeTable], startTime);
-        }
-      });
-    } catch (error) {
-      console.error(`Error in playInstrument for ${instrument}: ${error}`);
-    }
-  }, [synths]);
-  
-  const onMessage = useCallback(async (event: MessageEvent) => {
-    const bundle = JSON.parse(event.data);
-    const playPromises = Object.entries(bundle).map(([instrument, chord]) => {
-      if (typeof chord === 'string') {
-        return playInstrument(instrument, chord);
+  const playInstrument = useCallback(
+    (instrument: string, chordOrNote: string | undefined) => {
+      if (!chordOrNote || !synths) {
+        console.error('Synths not loaded or invalid note');
+        return;
       }
-    }).filter(promise => promise !== undefined);
-  
-    await Promise.all(playPromises);
-  }, [playInstrument]);
-  
+
+      const synth = synths[instrument as keyof Synths];
+      if (!synth) {
+        console.error(`Instrument ${instrument} not found`);
+        return;
+      }
+
+      try {
+        console.log(`Playing ${instrument} notes ${chordOrNote}`);
+        const notes = chordToNotes(chordOrNote);
+        notes.forEach((note, index) => {
+          const noteWithOctave = note.length === 1 ? `${note}4` : note; // Append '4' if missing
+          const startTime = Tone.now() + index * 0.2 + 0.1; // Slight delay
+
+          if (synth instanceof Tone.Sampler) {
+            synth.triggerAttack(noteWithOctave, startTime);
+            synth.triggerRelease(noteWithOctave, startTime + 0.5);
+          } else if ('triggerAttack' in synth) {
+            synth.triggerAttack(noteWithOctave, startTime);
+            synth.triggerRelease(startTime + 0.5);
+          } else {
+            (synth as Tone.Synth<SynthOptions>).triggerAttackRelease(
+              noteWithOctave,
+              timeTable[instrument as keyof typeof timeTable],
+              startTime
+            );
+          }
+        });
+      } catch (error) {
+        console.error(`Error in playInstrument for ${instrument}:`, error);
+      }
+    },
+    [synths]
+  );
+
+  const onMessage = useCallback(
+    async (event: MessageEvent) => {
+      const bundle = JSON.parse(event.data);
+      const playPromises = Object.entries(bundle)
+        .map(([instrument, chord]) => {
+          if (typeof chord === 'string') {
+            return playInstrument(instrument, chord);
+          }
+        })
+        .filter(Boolean);
+
+      await Promise.all(playPromises);
+    },
+    [playInstrument]
+  );
 
   useEffect(() => {
+    if (!socket) return;
+
     socket.addEventListener('message', onMessage);
     return () => {
       socket.removeEventListener('message', onMessage);
@@ -138,17 +141,17 @@ function MusicPlayer() {
         await audioContextRef.current.resume();
         console.log('Audio context started');
       } catch (error) {
-        console.error(error);
+        console.error('Error starting audio context:', error);
       }
     }
   };
 
   const handleStopAudio = () => {
-    if (audioContextRef.current && audioContextRef.current.state === 'running') {
+    if (audioContextRef.current.state === 'running') {
       audioContextRef.current.close().then(() => {
         console.log('Audio context stopped');
       }).catch((error) => {
-        console.error(error);
+        console.error('Error stopping audio context:', error);
       });
     }
   };
@@ -158,8 +161,8 @@ function MusicPlayer() {
       <h1>WebSocket Music Player</h1>
       <p>Connecting to the server and playing music...</p>
       <input type="range" min="0" max="100" defaultValue="50" />
-      <button id="playButton" onClick={handleStartAudio}>Play</button>
-      <button id="pauseButton" onClick={handleStopAudio}>Pause</button>
+      <button onClick={handleStartAudio}>Play</button>
+      <button onClick={handleStopAudio}>Pause</button>
     </div>
   );
 }
